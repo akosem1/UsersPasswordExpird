@@ -1,0 +1,305 @@
+# סקריפט WPF להצגת משתמשים שלא החליפו סיסמה ב-3 חודשים
+# יש לרוץ עם הרשאות מנהל וגישה ל-Active Directory
+
+Add-Type -AssemblyName PresentationFramework
+Add-Type -AssemblyName PresentationCore
+Add-Type -AssemblyName WindowsBase
+
+# בדיקה אם Active Directory זמין
+try {
+    Import-Module ActiveDirectory -ErrorAction Stop
+    Get-ADDomain | Out-Null
+    Write-Host "מחובר בהצלחה ל-Active Directory" -ForegroundColor Green
+} catch {
+    Write-Host "שגיאה: לא ניתן להתחבר ל-Active Directory" -ForegroundColor Red
+    Write-Host "ודא שהמודול מותקן ויש לך הרשאות מתאימות" -ForegroundColor Red
+    pause
+    exit
+}
+
+# הגדרת OU ספציפי
+$TargetOU = "OU=Users,OU=Aviv Group,DC=oferbrothers,DC=local"
+
+# חישוב תאריך לפני 3 חודשים
+$ThreeMonthsAgo = (Get-Date).AddMonths(-3)
+
+# יצירת חלון ראשי
+$window = New-Object System.Windows.Window
+$window.Title = "מנהל איפוס סיסמאות AD - Aviv Group Users"
+$window.Height = 600
+$window.Width = 800
+$window.WindowStartupLocation = "CenterScreen"
+$window.FlowDirection = "RightToLeft"
+
+# יצירת Grid ראשי
+$mainGrid = New-Object System.Windows.Controls.Grid
+$window.Content = $mainGrid
+
+# הגדרת שורות לGrid
+$row1 = New-Object System.Windows.Controls.RowDefinition
+$row1.Height = "Auto"
+$row2 = New-Object System.Windows.Controls.RowDefinition  
+$row2.Height = "Auto"
+$row3 = New-Object System.Windows.Controls.RowDefinition
+$row3.Height = "*"
+$row4 = New-Object System.Windows.Controls.RowDefinition
+$row4.Height = "Auto"
+
+$mainGrid.RowDefinitions.Add($row1)
+$mainGrid.RowDefinitions.Add($row2)
+$mainGrid.RowDefinitions.Add($row3)
+$mainGrid.RowDefinitions.Add($row4)
+
+# כותרת
+$titleLabel = New-Object System.Windows.Controls.TextBlock
+$titleLabel.Text = "משתמשים שלא החליפו סיסמה ב-3 חודשים האחרונים - Aviv Group"
+$titleLabel.FontSize = 16
+$titleLabel.FontWeight = "Bold"
+$titleLabel.HorizontalAlignment = "Center"
+$titleLabel.Margin = "0,10,0,15"
+[System.Windows.Controls.Grid]::SetRow($titleLabel, 0)
+$mainGrid.Children.Add($titleLabel)
+
+# פאנל בקרות עליונות
+$controlPanel = New-Object System.Windows.Controls.StackPanel
+$controlPanel.Orientation = "Horizontal"
+$controlPanel.Margin = "10,0,10,10"
+[System.Windows.Controls.Grid]::SetRow($controlPanel, 1)
+
+# CheckBox - בחר הכל
+$selectAllCheckBox = New-Object System.Windows.Controls.CheckBox
+$selectAllCheckBox.Content = "בחר הכל"
+$selectAllCheckBox.FontSize = 12
+$selectAllCheckBox.VerticalAlignment = "Center"
+$selectAllCheckBox.Margin = "0,0,15,0"
+$controlPanel.Children.Add($selectAllCheckBox)
+
+# כפתור רענון
+$refreshButton = New-Object System.Windows.Controls.Button
+$refreshButton.Content = "רענן רשימה"
+$refreshButton.Width = 100
+$refreshButton.Height = 30
+$refreshButton.Margin = "0,0,15,0"
+$controlPanel.Children.Add($refreshButton)
+
+# תווית ספירה
+$countLabel = New-Object System.Windows.Controls.TextBlock
+$countLabel.Text = "נמצאו 0 משתמשים"
+$countLabel.VerticalAlignment = "Center"
+$countLabel.FontWeight = "Bold"
+$controlPanel.Children.Add($countLabel)
+
+$mainGrid.Children.Add($controlPanel)
+
+# ScrollViewer עבור רשימת המשתמשים
+$scrollViewer = New-Object System.Windows.Controls.ScrollViewer
+$scrollViewer.VerticalScrollBarVisibility = "Auto"
+$scrollViewer.Margin = "10,0,10,0"
+[System.Windows.Controls.Grid]::SetRow($scrollViewer, 2)
+
+# פאנל עבור המשתמשים
+$usersPanel = New-Object System.Windows.Controls.StackPanel
+$scrollViewer.Content = $usersPanel
+$mainGrid.Children.Add($scrollViewer)
+
+# פאנל כפתורי פעולה
+$buttonPanel = New-Object System.Windows.Controls.StackPanel
+$buttonPanel.Orientation = "Horizontal"
+$buttonPanel.HorizontalAlignment = "Center"
+$buttonPanel.Margin = "0,15,0,10"
+[System.Windows.Controls.Grid]::SetRow($buttonPanel, 3)
+
+# כפתור הכרחת החלפת סיסמה
+$forcePasswordChangeButton = New-Object System.Windows.Controls.Button
+$forcePasswordChangeButton.Content = "הכרח החלפת סיסמה למשתמשים שנבחרו"
+$forcePasswordChangeButton.Width = 250
+$forcePasswordChangeButton.Height = 35
+$forcePasswordChangeButton.FontSize = 12
+$forcePasswordChangeButton.FontWeight = "Bold"
+$forcePasswordChangeButton.Background = "DarkOrange"
+$forcePasswordChangeButton.Foreground = "White"
+$forcePasswordChangeButton.Margin = "0,0,15,0"
+$buttonPanel.Children.Add($forcePasswordChangeButton)
+
+# כפתור יציאה
+$exitButton = New-Object System.Windows.Controls.Button
+$exitButton.Content = "יציאה"
+$exitButton.Width = 80
+$exitButton.Height = 35
+$exitButton.FontSize = 12
+$buttonPanel.Children.Add($exitButton)
+
+$mainGrid.Children.Add($buttonPanel)
+
+# רשימה גלובלית של CheckBox controls
+$global:UserCheckBoxes = @()
+
+# פונקציה לטעינת משתמשים
+function Load-Users {
+    Write-Host "טוען משתמשים מ-OU: $TargetOU" -ForegroundColor Yellow
+    
+    # ניקוי הרשימה הקיימת
+    $usersPanel.Children.Clear()
+    $global:UserCheckBoxes = @()
+    
+    try {
+        # בדיקה שה-OU קיים
+        try {
+            Get-ADOrganizationalUnit -Identity $TargetOU | Out-Null
+            Write-Host "נמצא OU: $TargetOU" -ForegroundColor Green
+        } catch {
+            Write-Host "שגיאה: לא נמצא OU $TargetOU" -ForegroundColor Red
+            [System.Windows.MessageBox]::Show("לא נמצא OU: $TargetOU`nודא שה-OU קיים ויש לך הרשאות גישה", "שגיאה", "OK", "Error")
+            return
+        }
+        
+        # שליפת המשתמשים הפעילים מה-OU הספציפי
+        Write-Host "מחפש משתמשים עם סיסמה שלא שונתה מאז $(($ThreeMonthsAgo).ToString('dd/MM/yyyy'))..." -ForegroundColor Yellow
+        
+        $users = Get-ADUser -Filter {Enabled -eq $true} -SearchBase $TargetOU -Properties Name, SamAccountName, PasswordLastSet, LastLogonDate |
+            Where-Object { 
+                $_.PasswordLastSet -ne $null -and 
+                $_.PasswordLastSet -lt $ThreeMonthsAgo 
+            } |
+            Sort-Object Name
+        
+        $countLabel.Text = "נמצאו $($users.Count) משתמשים ב-Aviv Group"
+        Write-Host "נמצאו $($users.Count) משתמשים ב-Aviv Group" -ForegroundColor Green
+        
+        foreach ($user in $users) {
+            # יצירת CheckBox עבור כל משתמש
+            $checkBox = New-Object System.Windows.Controls.CheckBox
+            
+            # הוספת תוכן בצורה בטוחה
+            $displayText = "$($user.Name) ($($user.SamAccountName))"
+            $checkBox.Content = $displayText
+            $checkBox.Tag = $user.SamAccountName
+            
+            # הגדרות עיצוב
+            $margin = New-Object System.Windows.Thickness(5,2,5,2)
+            $checkBox.Margin = $margin
+            $checkBox.FontSize = 11
+            
+            # הוספת מידע נוסף
+            $lastPasswordChange = if ($user.PasswordLastSet) { 
+                $user.PasswordLastSet.ToString("dd/MM/yyyy") 
+            } else { 
+                "לא ידוע" 
+            }
+            
+            $lastLogon = if ($user.LastLogonDate) { 
+                $user.LastLogonDate.ToString("dd/MM/yyyy") 
+            } else { 
+                "לא ידוע" 
+            }
+            
+            $tooltipText = "סיסמה שונתה לאחרונה: $lastPasswordChange`nכניסה אחרונה: $lastLogon"
+            $checkBox.ToolTip = $tooltipText
+            
+            $usersPanel.Children.Add($checkBox) | Out-Null
+            $global:UserCheckBoxes += $checkBox
+        }
+        
+        Write-Host "הטעינה הושלמה בהצלחה" -ForegroundColor Green
+        
+    } catch {
+        $errorMsg = "שגיאה בטעינת משתמשים: $($_.Exception.Message)"
+        Write-Host $errorMsg -ForegroundColor Red
+        [System.Windows.MessageBox]::Show($errorMsg, "שגיאה", "OK", "Error")
+    }
+}
+
+# Event Handlers
+$selectAllCheckBox.Add_Checked({
+    Write-Host "בוחר את כל המשתמשים" -ForegroundColor Yellow
+    $global:UserCheckBoxes | ForEach-Object { $_.IsChecked = $true }
+})
+
+$selectAllCheckBox.Add_Unchecked({
+    Write-Host "מבטל בחירת כל המשתמשים" -ForegroundColor Yellow
+    $global:UserCheckBoxes | ForEach-Object { $_.IsChecked = $false }
+})
+
+$refreshButton.Add_Click({
+    Write-Host "מרענן רשימה..." -ForegroundColor Yellow
+    Load-Users
+    $selectAllCheckBox.IsChecked = $false
+})
+
+$forcePasswordChangeButton.Add_Click({
+    $selectedUsers = $global:UserCheckBoxes | Where-Object { $_.IsChecked -eq $true }
+    
+    if ($selectedUsers.Count -eq 0) {
+        [System.Windows.MessageBox]::Show("לא נבחרו משתמשים", "התראה", "OK", "Warning")
+        return
+    }
+    
+    $result = [System.Windows.MessageBox]::Show(
+        "האם אתה בטוח שברצונך להכריח $($selectedUsers.Count) משתמשים להחליף סיסמה בכניסה הבאה?", 
+        "אישור", 
+        "YesNo", 
+        "Question"
+    )
+    
+    if ($result -eq "Yes") {
+        Write-Host "מתחיל להכריח החלפת סיסמה..." -ForegroundColor Yellow
+        $successCount = 0
+        $errorCount = 0
+        $errors = @()
+        
+        foreach ($userCheckBox in $selectedUsers) {
+            $username = $userCheckBox.Tag
+            try {
+                Set-ADUser -Identity $username -ChangePasswordAtLogon $true
+                $successCount++
+                Write-Host "הוגדר בהצלחה: $username" -ForegroundColor Green
+            } catch {
+                $errorCount++
+                $errors += "$username : $($_.Exception.Message)"
+                Write-Host "שגיאה עם $username : $($_.Exception.Message)" -ForegroundColor Red
+            }
+        }
+        
+        $message = "הושלם!`n"
+        $message += "הצליח: $successCount משתמשים`n"
+        
+        if ($errorCount -gt 0) {
+            $message += "נכשל: $errorCount משתמשים`n`n"
+            $message += "שגיאות:`n"
+            $message += ($errors -join "`n")
+        }
+        
+        Write-Host "תוצאות: הצליח $successCount, נכשל $errorCount" -ForegroundColor Cyan
+        [System.Windows.MessageBox]::Show($message, "תוצאות", "OK", "Information")
+        
+        # רענון הרשימה
+        Load-Users
+        $selectAllCheckBox.IsChecked = $false
+    }
+})
+
+$exitButton.Add_Click({
+    Write-Host "סוגר יישום..." -ForegroundColor Yellow
+    $window.Close()
+})
+
+# הוספת טיפול בסגירת החלון
+$window.Add_Closing({
+    Write-Host "מסיים..." -ForegroundColor Yellow
+    $_.Cancel = $false
+})
+
+# טעינה ראשונית של המשתמשים
+Write-Host "מתחיל טעינת ממשק עבור Aviv Group..." -ForegroundColor Cyan
+Load-Users
+
+# הצגת החלון
+Write-Host "מציג ממשק..." -ForegroundColor Cyan
+try {
+    $window.ShowDialog() | Out-Null
+} catch {
+    Write-Host "שגיאה בהצגת החלון: $($_.Exception.Message)" -ForegroundColor Red
+    pause
+}
+
+Write-Host "תוכנית הסתיימה" -ForegroundColor Cyan
