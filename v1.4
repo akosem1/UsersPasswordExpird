@@ -1,0 +1,525 @@
+# סקריפט WPF להצגת משתמשים שלא החליפו סיסמה ב-3 חודשים
+# יש לרוץ עם הרשאות מנהל וגישה ל-Active Directory
+
+Add-Type -AssemblyName PresentationFramework
+Add-Type -AssemblyName PresentationCore
+Add-Type -AssemblyName WindowsBase
+
+# בדיקה אם Active Directory זמין
+try {
+    Import-Module ActiveDirectory -ErrorAction Stop
+    Get-ADDomain | Out-Null
+    Write-Host "מחובר בהצלחה ל-Active Directory" -ForegroundColor Green
+} catch {
+    Write-Host "שגיאה: לא ניתן להתחבר ל-Active Directory" -ForegroundColor Red
+    Write-Host "ודא שהמודול מותקן ויש לך הרשאות מתאימות" -ForegroundColor Red
+    pause
+    exit
+}
+
+# הגדרת OU ספציפי
+$TargetOU = "OU=Users,OU=Aviv Group,DC=oferbrothers,DC=local"
+
+# חישוב תאריך לפני 3 חודשים
+$ThreeMonthsAgo = (Get-Date).AddMonths(-3)
+
+# יצירת חלון ראשי
+$window = New-Object System.Windows.Window
+$window.Title = "מנהל איפוס סיסמאות AD - Aviv Group Users"
+$window.Height = 500
+$window.Width = 820
+$window.WindowStartupLocation = "CenterScreen"
+$window.FlowDirection = "RightToLeft"
+$window.ResizeMode = "CanMinimize "
+
+# יצירת Grid ראשי
+$mainGrid = New-Object System.Windows.Controls.Grid
+$window.Content = $mainGrid
+
+# הגדרת שורות לGrid
+$row1 = New-Object System.Windows.Controls.RowDefinition
+$row1.Height = "Auto"
+$row2 = New-Object System.Windows.Controls.RowDefinition  
+$row2.Height = "Auto"
+$row3 = New-Object System.Windows.Controls.RowDefinition
+$row3.Height = "*"
+$row4 = New-Object System.Windows.Controls.RowDefinition
+$row4.Height = "Auto"
+
+$mainGrid.RowDefinitions.Add($row1)
+$mainGrid.RowDefinitions.Add($row2)
+$mainGrid.RowDefinitions.Add($row3)
+$mainGrid.RowDefinitions.Add($row4)
+
+# כותרת
+$titleLabel = New-Object System.Windows.Controls.TextBlock
+$titleLabel.Text = "משתמשים שלא החליפו סיסמה ב-3 חודשים האחרונים - Aviv Group"
+$titleLabel.FontSize = 16
+$titleLabel.FontWeight = "Bold"
+$titleLabel.HorizontalAlignment = "Center"
+$titleLabel.Margin = "0,10,0,15"
+[System.Windows.Controls.Grid]::SetRow($titleLabel, 0)
+$mainGrid.Children.Add($titleLabel)
+
+# פאנל בקרות עליונות
+$controlPanel = New-Object System.Windows.Controls.StackPanel
+$controlPanel.Orientation = "Horizontal"
+$controlPanel.Margin = "10,0,10,10"
+[System.Windows.Controls.Grid]::SetRow($controlPanel, 1)
+
+# CheckBox - בחר הכל
+$selectAllCheckBox = New-Object System.Windows.Controls.CheckBox
+$selectAllCheckBox.Content = "בחר הכל"
+$selectAllCheckBox.FontSize = 12
+$selectAllCheckBox.VerticalAlignment = "Center"
+$selectAllCheckBox.Margin = "0,0,15,0"
+$controlPanel.Children.Add($selectAllCheckBox)
+
+# כפתור רענון
+$refreshButton = New-Object System.Windows.Controls.Button
+$refreshButton.Content = "רענן רשימה"
+$refreshButton.Width = 100
+$refreshButton.Height = 30
+$refreshButton.Margin = "0,0,15,0"
+$controlPanel.Children.Add($refreshButton)
+
+# כפתור ייצוא לאקסל
+$exportButton = New-Object System.Windows.Controls.Button
+$exportButton.Content = "ייצא לאקסל"
+$exportButton.Width = 100
+$exportButton.Height = 30
+$exportButton.Margin = "0,0,15,0"
+$exportButton.Background = "DarkGreen"
+$exportButton.Foreground = "White"
+$controlPanel.Children.Add($exportButton)
+
+# תווית ספירה
+$countLabel = New-Object System.Windows.Controls.TextBlock
+$countLabel.Text = "נמצאו 0 משתמשים"
+$countLabel.VerticalAlignment = "Center"
+$countLabel.FontWeight = "Bold"
+$controlPanel.Children.Add($countLabel)
+
+$mainGrid.Children.Add($controlPanel)
+
+# DataGrid עבור רשימת המשתמשים
+$dataGrid = New-Object System.Windows.Controls.DataGrid
+$dataGrid.Margin = "10,0,10,0"
+$dataGrid.AutoGenerateColumns = $false
+$dataGrid.CanUserAddRows = $false
+$dataGrid.CanUserDeleteRows = $false
+$dataGrid.IsReadOnly = $false
+$dataGrid.SelectionMode = "Extended"
+$dataGrid.GridLinesVisibility = "All"
+$dataGrid.AlternatingRowBackground = "LightGray"
+$dataGrid.HeadersVisibility = "Column"
+$dataGrid.FlowDirection = "RightToLeft"
+[System.Windows.Controls.Grid]::SetRow($dataGrid, 2)
+
+# הגדרת עמודות הטבלה
+$checkColumn = New-Object System.Windows.Controls.DataGridCheckBoxColumn
+$checkColumn.Header = "בחירה"
+$checkColumn.Binding = New-Object System.Windows.Data.Binding("IsSelected")
+$checkColumn.Width = 60
+$dataGrid.Columns.Add($checkColumn)
+
+$nameColumn = New-Object System.Windows.Controls.DataGridTextColumn
+$nameColumn.Header = "שם המשתמש"
+$nameColumn.Binding = New-Object System.Windows.Data.Binding("Name")
+$nameColumn.Width = 200
+$nameColumn.IsReadOnly = $true
+$dataGrid.Columns.Add($nameColumn)
+
+$usernameColumn = New-Object System.Windows.Controls.DataGridTextColumn
+$usernameColumn.Header = "SamAccountName"
+$usernameColumn.Binding = New-Object System.Windows.Data.Binding("SamAccountName")
+$usernameColumn.Width = 130
+$usernameColumn.IsReadOnly = $true
+$dataGrid.Columns.Add($usernameColumn)
+
+$passwordLastSetColumn = New-Object System.Windows.Controls.DataGridTextColumn
+$passwordLastSetColumn.Header = "סיסמה שונתה לאחרונה"
+$passwordLastSetColumn.Binding = New-Object System.Windows.Data.Binding("PasswordLastSetFormatted")
+$passwordLastSetColumn.Width = 150
+$passwordLastSetColumn.IsReadOnly = $true
+$dataGrid.Columns.Add($passwordLastSetColumn)
+
+$lastLogonColumn = New-Object System.Windows.Controls.DataGridTextColumn
+$lastLogonColumn.Header = "כניסה אחרונה"
+$lastLogonColumn.Binding = New-Object System.Windows.Data.Binding("LastLogonFormatted")
+$lastLogonColumn.Width = 130
+$lastLogonColumn.IsReadOnly = $true
+$dataGrid.Columns.Add($lastLogonColumn)
+
+$daysSincePasswordChangeColumn = New-Object System.Windows.Controls.DataGridTextColumn
+$daysSincePasswordChangeColumn.Header = "ימים שעברו"
+$daysSincePasswordChangeColumn.Binding = New-Object System.Windows.Data.Binding("DaysSincePasswordChange")
+$daysSincePasswordChangeColumn.Width = 100
+$daysSincePasswordChangeColumn.IsReadOnly = $true
+$dataGrid.Columns.Add($daysSincePasswordChangeColumn)
+
+$mainGrid.Children.Add($dataGrid)
+
+# פאנל כפתורי פעולה
+$buttonPanel = New-Object System.Windows.Controls.StackPanel
+$buttonPanel.Orientation = "Horizontal"
+$buttonPanel.HorizontalAlignment = "Center"
+$buttonPanel.Margin = "0,15,0,10"
+[System.Windows.Controls.Grid]::SetRow($buttonPanel, 3)
+
+# כפתור הכרחת החלפת סיסמה
+$forcePasswordChangeButton = New-Object System.Windows.Controls.Button
+$forcePasswordChangeButton.Content = "הכרח החלפת סיסמה למשתמשים שנבחרו"
+$forcePasswordChangeButton.Width = 250
+$forcePasswordChangeButton.Height = 35
+$forcePasswordChangeButton.FontSize = 12
+$forcePasswordChangeButton.FontWeight = "Bold"
+$forcePasswordChangeButton.Background = "DarkOrange"
+$forcePasswordChangeButton.Foreground = "White"
+$forcePasswordChangeButton.Margin = "0,0,15,0"
+$buttonPanel.Children.Add($forcePasswordChangeButton)
+
+# כפתור יציאה
+$exitButton = New-Object System.Windows.Controls.Button
+$exitButton.Content = "יציאה"
+$exitButton.Width = 80
+$exitButton.Height = 35
+$exitButton.FontSize = 12
+$buttonPanel.Children.Add($exitButton)
+
+$mainGrid.Children.Add($buttonPanel)
+
+# רשימה גלובלית של נתוני משתמשים
+$global:UsersData = New-Object System.Collections.ObjectModel.ObservableCollection[Object]
+
+# פונקציה לייצוא לאקסל
+function Export-ToExcel {
+    if ($global:UsersData.Count -eq 0) {
+        [System.Windows.MessageBox]::Show("אין נתונים לייצוא", "התראה", "OK", "Warning")
+        return
+    }
+    
+    try {
+        # יצירת תיקיית הייצוא אם לא קיימת
+        $exportPath = "$env:USERPROFILE\Desktop\AD_Reports"
+        if (!(Test-Path $exportPath)) {
+            New-Item -ItemType Directory -Path $exportPath -Force | Out-Null
+        }
+        
+        # יצירת שם קובץ עם תאריך ושעה
+        $fileName = "AD_Users_Password_Report_$(Get-Date -Format 'yyyy-MM-dd_HH-mm-ss').xlsx"
+        $fullPath = Join-Path $exportPath $fileName
+        
+        Write-Host "מייצא נתונים לאקסל..." -ForegroundColor Yellow
+        
+        # בדיקה אם ImportExcel זמין
+        if (!(Get-Module -ListAvailable -Name ImportExcel)) {
+            Write-Host "מתקין מודול ImportExcel..." -ForegroundColor Yellow
+            try {
+                Install-Module -Name ImportExcel -Force -Scope CurrentUser -AllowClobber
+                Import-Module ImportExcel
+            } catch {
+                Write-Host "לא ניתן להתקין ImportExcel, מייצא ל-CSV במקום..." -ForegroundColor Red
+                Export-ToCSV
+                return
+            }
+        } else {
+            Import-Module ImportExcel
+        }
+        
+        # הכנת הנתונים לייצוא
+        $exportData = @()
+        foreach ($user in $global:UsersData) {
+            $exportData += [PSCustomObject]@{
+                'שם המשתמש' = $user.Name
+                'שם משתמש (SamAccountName)' = $user.SamAccountName
+                'סיסמה שונתה לאחרונה' = $user.PasswordLastSetFormatted
+                'כניסה אחרונה' = $user.LastLogonFormatted
+                'מספר ימים מאז החלפת סיסמה' = if ($user.PasswordLastSet) { 
+                    [math]::Round((New-TimeSpan -Start $user.PasswordLastSet -End (Get-Date)).TotalDays) 
+                } else { 
+                    "לא ידוע" 
+                }
+            }
+        }
+        
+        # יצירת קובץ Excel עם עיצוב
+        $exportData | Export-Excel -Path $fullPath -WorksheetName "משתמשים - החלפת סיסמה" -TableStyle Medium2 -AutoSize -FreezeTopRow -BoldTopRow
+        
+        # הוספת גיליון עם מידע נוסף
+        $summaryData = @(
+            [PSCustomObject]@{
+                'פרט' = 'תאריך הדוח'
+                'ערך' = (Get-Date -Format 'dd/MM/yyyy HH:mm:ss')
+            },
+            [PSCustomObject]@{
+                'פרט' = 'OU נסקר'
+                'ערך' = $TargetOU
+            },
+            [PSCustomObject]@{
+                'פרט' = 'סף זמן (חודשים)'
+                'ערך' = '3'
+            },
+            [PSCustomObject]@{
+                'פרט' = 'מספר משתמשים שנמצאו'
+                'ערך' = $global:UsersData.Count
+            },
+            [PSCustomObject]@{
+                'פרט' = 'תאריך סף'
+                'ערך' = $ThreeMonthsAgo.ToString('dd/MM/yyyy')
+            }
+        )
+        
+        $summaryData | Export-Excel -Path $fullPath -WorksheetName "מידע כללי" -TableStyle Light1 -AutoSize -BoldTopRow
+        
+        Write-Host "הייצוא הושלם בהצלחה!" -ForegroundColor Green
+        [System.Windows.MessageBox]::Show("הקובץ נשמר בהצלחה ב:`n$fullPath`n`nמספר רשומות: $($exportData.Count)", "ייצוא הושלם", "OK", "Information")
+        
+        # פתיחת התיקייה
+        $result = [System.Windows.MessageBox]::Show("האם תרצה לפתוח את תיקיית הייצוא?", "פתח תיקייה", "YesNo", "Question")
+        if ($result -eq "Yes") {
+            Start-Process -FilePath $exportPath
+        }
+        
+    } catch {
+        $errorMsg = "שגיאה בייצוא לאקסל: $($_.Exception.Message)"
+        Write-Host $errorMsg -ForegroundColor Red
+        [System.Windows.MessageBox]::Show($errorMsg, "שגיאה", "OK", "Error")
+        
+        # ניסיון ייצוא ל-CSV כגיבוי
+        Write-Host "מנסה ייצוא ל-CSV כגיבוי..." -ForegroundColor Yellow
+        Export-ToCSV
+    }
+}
+
+# פונקציה לייצוא ל-CSV (גיבוי)
+function Export-ToCSV {
+    try {
+        # יצירת תיקיית הייצוא אם לא קיימת
+        $exportPath = "$env:USERPROFILE\Desktop\AD_Reports"
+        if (!(Test-Path $exportPath)) {
+            New-Item -ItemType Directory -Path $exportPath -Force | Out-Null
+        }
+        
+        # יצירת שם קובץ עם תאריך ושעה
+        $fileName = "AD_Users_Password_Report_$(Get-Date -Format 'yyyy-MM-dd_HH-mm-ss').csv"
+        $fullPath = Join-Path $exportPath $fileName
+        
+        # הכנת הנתונים לייצוא
+        $exportData = @()
+        foreach ($user in $global:UsersData) {
+            $exportData += [PSCustomObject]@{
+                'שם המשתמש' = $user.Name
+                'שם משתמש (SamAccountName)' = $user.SamAccountName
+                'סיסמה שונתה לאחרונה' = $user.PasswordLastSetFormatted
+                'כניסה אחרונה' = $user.LastLogonFormatted
+                'מספר ימים מאז החלפת סיסמה' = if ($user.PasswordLastSet) { 
+                    [math]::Round((New-TimeSpan -Start $user.PasswordLastSet -End (Get-Date)).TotalDays) 
+                } else { 
+                    "לא ידוע" 
+                }
+            }
+        }
+        
+        # ייצוא ל-CSV עם קידוד UTF-8
+        $exportData | Export-Csv -Path $fullPath -NoTypeInformation -Encoding UTF8
+        
+        Write-Host "הייצוא ל-CSV הושלם בהצלחה!" -ForegroundColor Green
+        [System.Windows.MessageBox]::Show("הקובץ נשמר בהצלחה ב:`n$fullPath`n`nמספר רשומות: $($exportData.Count)", "ייצוא ל-CSV הושלם", "OK", "Information")
+        
+        # פתיחת התיקייה
+        $result = [System.Windows.MessageBox]::Show("האם תרצה לפתוח את תיקיית הייצוא?", "פתח תיקייה", "YesNo", "Question")
+        if ($result -eq "Yes") {
+            Start-Process -FilePath $exportPath
+        }
+        
+    } catch {
+        $errorMsg = "שגיאה בייצוא ל-CSV: $($_.Exception.Message)"
+        Write-Host $errorMsg -ForegroundColor Red
+        [System.Windows.MessageBox]::Show($errorMsg, "שגיאה", "OK", "Error")
+    }
+}
+
+# פונקציה לטעינת משתמשים
+function Load-Users {
+    Write-Host "טוען משתמשים מ-OU: $TargetOU" -ForegroundColor Yellow
+    
+    # ניקוי הרשימה הקיימת
+    $global:UsersData.Clear()
+    
+    try {
+        # בדיקה שה-OU קיים
+        try {
+            Get-ADOrganizationalUnit -Identity $TargetOU | Out-Null
+            Write-Host "נמצא OU: $TargetOU" -ForegroundColor Green
+        } catch {
+            Write-Host "שגיאה: לא נמצא OU $TargetOU" -ForegroundColor Red
+            [System.Windows.MessageBox]::Show("לא נמצא OU: $TargetOU`nודא שה-OU קיים ויש לך הרשאות גישה", "שגיאה", "OK", "Error")
+            return
+        }
+        
+        # שליפת המשתמשים הפעילים מה-OU הספציפי
+        Write-Host "מחפש משתמשים עם סיסמה שלא שונתה מאז $(($ThreeMonthsAgo).ToString('dd/MM/yyyy'))..." -ForegroundColor Yellow
+        
+        $users = Get-ADUser -Filter {Enabled -eq $true} -SearchBase $TargetOU -Properties Name, SamAccountName, PasswordLastSet, LastLogonDate |
+            Where-Object { 
+                $_.PasswordLastSet -ne $null -and 
+                $_.PasswordLastSet -lt $ThreeMonthsAgo 
+            } |
+            Sort-Object Name
+        
+        $countLabel.Text = "נמצאו $($users.Count) משתמשים ב-Aviv Group"
+        Write-Host "נמצאו $($users.Count) משתמשים ב-Aviv Group" -ForegroundColor Green
+        
+        # הגדרת גובה הטבלה בהתאם למספר המשתמשים
+        if ($users.Count -gt 15) {
+            $dataGrid.MaxHeight = 400  # גובה קבוע עבור יותר מ-15 משתמשים
+        } else {
+            $dataGrid.MaxHeight = [Double]::PositiveInfinity  # גובה דינמי עבור 15 משתמשים או פחות
+        }
+        
+        foreach ($user in $users) {
+            # יצירת אובייקט נתונים עבור כל משתמש
+            $userData = New-Object PSObject -Property @{
+                IsSelected = $false
+                Name = $user.Name
+                SamAccountName = $user.SamAccountName
+                PasswordLastSet = $user.PasswordLastSet
+                PasswordLastSetFormatted = if ($user.PasswordLastSet) { 
+                    $user.PasswordLastSet.ToString("dd/MM/yyyy") 
+                } else { 
+                    "לא ידוע" 
+                }
+                LastLogonDate = $user.LastLogonDate
+                LastLogonFormatted = if ($user.LastLogonDate) { 
+                    $user.LastLogonDate.ToString("dd/MM/yyyy") 
+                } else { 
+                    "לא ידוע" 
+                }
+                DaysSincePasswordChange = if ($user.PasswordLastSet) { 
+                    [math]::Round((New-TimeSpan -Start $user.PasswordLastSet -End (Get-Date)).TotalDays) 
+                } else { 
+                    "לא ידוע" 
+                }
+            }
+            
+            $global:UsersData.Add($userData)
+        }
+        
+        # קישור הנתונים לטבלה
+        $dataGrid.ItemsSource = $global:UsersData
+        
+        Write-Host "הטעינה הושלמה בהצלחה" -ForegroundColor Green
+        
+    } catch {
+        $errorMsg = "שגיאה בטעינת משתמשים: $($_.Exception.Message)"
+        Write-Host $errorMsg -ForegroundColor Red
+        [System.Windows.MessageBox]::Show($errorMsg, "שגיאה", "OK", "Error")
+    }
+}
+
+# Event Handlers
+$selectAllCheckBox.Add_Checked({
+    Write-Host "בוחר את כל המשתמשים" -ForegroundColor Yellow
+    foreach ($user in $global:UsersData) {
+        $user.IsSelected = $true
+    }
+    $dataGrid.Items.Refresh()
+})
+
+$selectAllCheckBox.Add_Unchecked({
+    Write-Host "מבטל בחירת כל המשתמשים" -ForegroundColor Yellow
+    foreach ($user in $global:UsersData) {
+        $user.IsSelected = $false
+    }
+    $dataGrid.Items.Refresh()
+})
+
+$refreshButton.Add_Click({
+    Write-Host "מרענן רשימה..." -ForegroundColor Yellow
+    Load-Users
+    $selectAllCheckBox.IsChecked = $false
+})
+
+$exportButton.Add_Click({
+    Write-Host "מתחיל ייצוא..." -ForegroundColor Yellow
+    Export-ToExcel
+})
+
+$forcePasswordChangeButton.Add_Click({
+    $selectedUsers = $global:UsersData | Where-Object { $_.IsSelected -eq $true }
+    
+    if ($selectedUsers.Count -eq 0) {
+        [System.Windows.MessageBox]::Show("לא נבחרו משתמשים", "התראה", "OK", "Warning")
+        return
+    }
+    
+    $result = [System.Windows.MessageBox]::Show(
+        "האם אתה בטוח שברצונך להכריח $($selectedUsers.Count) משתמשים להחליף סיסמה בכניסה הבאה?", 
+        "אישור", 
+        "YesNo", 
+        "Question"
+    )
+    
+    if ($result -eq "Yes") {
+        Write-Host "מתחיל להכריח החלפת סיסמה..." -ForegroundColor Yellow
+        $successCount = 0
+        $errorCount = 0
+        $errors = @()
+        
+        foreach ($user in $selectedUsers) {
+            $username = $user.SamAccountName
+            try {
+                Set-ADUser -Identity $username -ChangePasswordAtLogon $true
+                $successCount++
+                Write-Host "הוגדר בהצלחה: $username" -ForegroundColor Green
+            } catch {
+                $errorCount++
+                $errors += "$username : $($_.Exception.Message)"
+                Write-Host "שגיאה עם $username : $($_.Exception.Message)" -ForegroundColor Red
+            }
+        }
+        
+        $message = "הושלם!`n"
+        $message += "הצליח: $successCount משתמשים`n"
+        
+        if ($errorCount -gt 0) {
+            $message += "נכשל: $errorCount משתמשים`n`n"
+            $message += "שגיאות:`n"
+            $message += ($errors -join "`n")
+        }
+        
+        Write-Host "תוצאות: הצליח $successCount, נכשל $errorCount" -ForegroundColor Cyan
+        [System.Windows.MessageBox]::Show($message, "תוצאות", "OK", "Information")
+        
+        # רענון הרשימה
+        Load-Users
+        $selectAllCheckBox.IsChecked = $false
+    }
+})
+
+$exitButton.Add_Click({
+    Write-Host "סוגר יישום..." -ForegroundColor Yellow
+    $window.Close()
+})
+
+# הוספת טיפול בסגירת החלון
+$window.Add_Closing({
+    Write-Host "מסיים..." -ForegroundColor Yellow
+    $_.Cancel = $false
+})
+
+# טעינה ראשונית של המשתמשים
+Write-Host "מתחיל טעינת ממשק עבור Aviv Group..." -ForegroundColor Cyan
+Load-Users
+
+# הצגת החלון
+Write-Host "מציג ממשק..." -ForegroundColor Cyan
+try {
+    $window.ShowDialog() | Out-Null
+} catch {
+    Write-Host "שגיאה בהצגת החלון: $($_.Exception.Message)" -ForegroundColor Red
+    pause
+}
+
+Write-Host "תוכנית הסתיימה" -ForegroundColor Cyan
